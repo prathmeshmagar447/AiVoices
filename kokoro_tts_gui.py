@@ -52,9 +52,8 @@ class TTSApp:
         # Settings and logging
         self.config_file = Path.home() / ".kokoro_tts_gui.json"
         self.setup_logging()
-        self.load_settings()
-
         self.build_ui()
+        self.load_settings()
 
     def build_ui(self):
         # Create scrollable frame with macOS-optimized spacing
@@ -412,12 +411,13 @@ class TTSApp:
         import concurrent.futures
         import time
 
-        # Get list of text files
-        txt_files = [f for f in os.listdir(input_dir) if f.lower().endswith(".txt")]
+        # Get list of text files recursively
+        input_path = Path(input_dir)
+        txt_files = list(input_path.rglob('*.txt'))
         total_files = len(txt_files)
 
         if total_files == 0:
-            self.log("No .txt files found in input directory")
+            self.log("No .txt files found in input directory or its subfolders")
             self.reset_ui_after_generation()
             return
 
@@ -428,19 +428,23 @@ class TTSApp:
         failed = 0
         start_time = time.time()
 
-        def process_file(fname):
+        def process_file(txt_file_path: Path):
             if self.cancel_requested:
                 return None
 
-            txt_path = os.path.join(input_dir, fname)
             try:
-                with open(txt_path, "r", encoding="utf-8") as f:
+                with open(txt_file_path, "r", encoding="utf-8") as f:
                     text = f.read().strip()
                 if not text:
-                    return f"Skipped empty file: {fname}"
+                    return f"Skipped empty file: {txt_file_path.relative_to(input_path)}"
 
-                out_fname = os.path.splitext(fname)[0] + f".{audio_format}"
-                out_path = os.path.join(output_dir, out_fname)
+                # Determine output path, preserving subfolder structure
+                relative_path = txt_file_path.relative_to(input_path)
+                output_subfolder = output_dir / relative_path.parent
+                output_subfolder.mkdir(parents=True, exist_ok=True)
+
+                out_fname = txt_file_path.stem + f".{audio_format}"
+                out_path = output_subfolder / out_fname
 
                 url = f"{self.api_base.get().rstrip('/')}/audio/speech"
                 payload = {
@@ -457,10 +461,10 @@ class TTSApp:
                         if chunk:
                             f_out.write(chunk)
 
-                return f"✓ {fname} → {out_fname}"
+                return f"✓ {relative_path} → {out_path.relative_to(output_dir)}"
 
             except Exception as e:
-                return f"✗ Error processing {fname}: {str(e)}"
+                return f"✗ Error processing {txt_file_path.relative_to(input_path)}: {str(e)}"
 
         # Process files concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrent) as executor:
